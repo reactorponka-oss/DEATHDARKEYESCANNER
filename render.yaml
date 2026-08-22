@@ -2,7 +2,10 @@ services:
   - type: web
     name: darkeye-bot
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      pip install --upgrade pip
+      pip install --no-cache-dir setuptools wheel
+      pip install -r requirements.txt
     startCommand: python darkeye_bot.py
     plan: free
     numReplicas: 1
@@ -20,4 +23,4 @@ services:
       - key: TOR_CONTROL_PORT
         value: 9051
       - key: TOR_PASSWORD
-        value: 16:B09768C3D3FF0FD5608762BF4B49EF0E30A1B9DE085F74B671F0F83EC0
+        value: B09768C3D3FF0FD5608762BF4B49EF0E30A1B9DE085F74B671F0F83EC0
