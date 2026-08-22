@@ -1,6 +1,7 @@
 pyrogram==2.0.106
 tgcrypto==1.2.5
 aiohttp==3.8.4
+aiosocks==0.2.6
 beautifulsoup4==4.12.2
 pillow==10.1.0
 requests==2.31.0
@@ -10,3 +11,8 @@ pandas==2.1.4
 cryptography==41.0.7
 nest-asyncio==1.6.0
 lxml==4.9.3
+psycopg2-binary==2.9.9
+redis==5.0.1
+deep-translator==1.11.4
+fpdf==1.7.2
+PySocks==1.7.1
