@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: darkeye-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python darkeye_bot.py
+    plan: free
+    numReplicas: 1
+    envVars:
+      - key: BOT_TOKEN
+        value: 8837738299:AAGjFwfQtU7XHgOyRYSEzDt_HZ6KWUmGU0Q
+      - key: API_ID
+        value: 30622410
+      - key: API_HASH
+        value: ac0e642a6cf43ced04f3cc2eabf5a21d
+      - key: USE_TOR
+        value: true
+      - key: TOR_PROXY
+        value: socks5://127.0.0.1:9050
+      - key: TOR_CONTROL_PORT
+        value: 9051
+      - key: TOR_PASSWORD
+        value: 16:B09768C3D3FF0FD5608762BF4B49EF0E30A1B9DE085F74B671F0F83EC0
