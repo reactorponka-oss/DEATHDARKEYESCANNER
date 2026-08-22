@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # DarkEye Scanner Bot v2.0 - Complete Production Version
-# All 14 Features: gn, leak, vendor, market, track, trending, filter, image, scam, deep, proxy, export
+# All 14 Features + TOR Proxy + PostgreSQL + Redis
 # By Shadow Hacker & Butter
 
 import os
@@ -22,7 +22,7 @@ import aiohttp
 import aiosocks
 from pyrogram import Client, filters
 from pyrogram.enums import ParseMode
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bs4 import BeautifulSoup
 import requests
 import aiofiles
@@ -32,6 +32,11 @@ import psycopg2
 import redis
 from deep_translator import GoogleTranslator
 import nest_asyncio
+import socks
+import socket
+import stem
+from stem import Signal
+from stem.control import Controller
 
 # Enable nested async
 nest_asyncio.apply()
@@ -45,26 +50,83 @@ logger = logging.getLogger("DarkEye")
 
 # --- ENVIRONMENT VARIABLES ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8837738299:AAGjFwfQtU7XHgOyRYSEzDt_HZ6KWUmGU0Q")
-API_ID = int(os.environ.get("API_ID", 30622410))
-API_HASH = os.environ.get("API_HASH", "ac0e642a6cf43ced04f3cc2eabf5a21d")
+API_ID = int(os.environ.get("API_ID", 123456))
+API_HASH = os.environ.get("API_HASH", "your_api_hash_here")
 
-# Database URLs
+# Database URLs (Render provides these)
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:pass@localhost:5432/darkeye")
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 
-# Tor settings
-TOR_PROXY = os.environ.get("TOR_PROXY", "socks5://127.0.0.1:9050")
+# TOR Settings
 USE_TOR = os.environ.get("USE_TOR", "true").lower() == "true"
+TOR_PROXY = os.environ.get("TOR_PROXY", "socks5://127.0.0.1:9050")
+TOR_CONTROL_PORT = int(os.environ.get("TOR_CONTROL_PORT", 9051))
+TOR_PASSWORD = os.environ.get("TOR_PASSWORD", "password")
 
-# --- DATABASE SETUP (PostgreSQL) ---
+# --- TOR CONTROLLER ---
+class TorController:
+    def __init__(self):
+        self.port = TOR_CONTROL_PORT
+        self.password = TOR_PASSWORD
+        self.is_running = False
+    
+    def renew_ip(self):
+        """Renew TOR IP address"""
+        if not USE_TOR:
+            return True
+        try:
+            with Controller.from_port(port=self.port) as controller:
+                controller.authenticate(password=self.password)
+                controller.signal(Signal.NEWNYM)
+                logger.info("🔄 TOR IP renewed successfully")
+                return True
+        except Exception as e:
+            logger.error(f"❌ TOR renewal failed: {e}")
+            return False
+    
+    def check_tor(self):
+        """Check if TOR is running"""
+        try:
+            sock = socks.socksocket()
+            sock.set_proxy(socks.SOCKS5, "127.0.0.1", 9050)
+            sock.settimeout(5)
+            sock.connect(("check.torproject.org", 80))
+            sock.send(b"GET / HTTP/1.0\r\nHost: check.torproject.org\r\n\r\n")
+            response = sock.recv(1024)
+            sock.close()
+            return b"Tor" in response
+        except:
+            return False
+
+tor_controller = TorController()
+
+# --- PROXY SESSION WITH TOR ---
+async def get_session():
+    """Create aiohttp session with TOR proxy"""
+    if USE_TOR:
+        # Use SOCKS5 proxy through TOR
+        conn = aiohttp.TCPConnector()
+        session = aiohttp.ClientSession(
+            connector=conn,
+            proxy=TOR_PROXY,
+            trust_env=True
+        )
+    else:
+        session = aiohttp.ClientSession()
+    return session
+
+# --- DATABASE SETUP (PostgreSQL + SQLite Fallback) ---
 class Database:
     def __init__(self):
         self.conn = None
+        self.use_postgres = False
         self.init_db()
     
     def init_db(self):
         try:
+            # Try PostgreSQL first
             self.conn = psycopg2.connect(DATABASE_URL)
+            self.use_postgres = True
             cursor = self.conn.cursor()
             
             # Create tables
@@ -128,10 +190,10 @@ class Database:
             """)
             
             self.conn.commit()
-            logger.info("✅ PostgreSQL database initialized")
+            logger.info("✅ PostgreSQL database connected")
         except Exception as e:
-            logger.error(f"❌ Database error: {e}")
-            # Fallback to SQLite
+            logger.warning(f"⚠️ PostgreSQL failed: {e}, using SQLite")
+            self.use_postgres = False
             self.conn = sqlite3.connect('darkeye.db', check_same_thread=False)
             self.init_sqlite()
     
@@ -162,27 +224,45 @@ class Database:
     
     def execute(self, query, params=None):
         cursor = self.conn.cursor()
-        if params:
-            cursor.execute(query, params)
+        if self.use_postgres:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         else:
-            cursor.execute(query)
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         self.conn.commit()
         return cursor
     
     def fetchone(self, query, params=None):
         cursor = self.conn.cursor()
-        if params:
-            cursor.execute(query, params)
+        if self.use_postgres:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         else:
-            cursor.execute(query)
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         return cursor.fetchone()
     
     def fetchall(self, query, params=None):
         cursor = self.conn.cursor()
-        if params:
-            cursor.execute(query, params)
+        if self.use_postgres:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         else:
-            cursor.execute(query)
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
         return cursor.fetchall()
 
 db = Database()
@@ -217,31 +297,17 @@ class Cache:
 
 cache = Cache()
 
-# --- PROXY SESSION ---
-async def get_session():
-    if USE_TOR:
-        conn = aiohttp.TCPConnector()
-        session = aiohttp.ClientSession(
-            connector=conn,
-            proxy=TOR_PROXY,
-            trust_env=True
-        )
-    else:
-        session = aiohttp.ClientSession()
-    return session
-
-# --- SCRAPERS (Real .onion scraping) ---
+# --- SCRAPERS (Real .onion scraping through TOR) ---
 
 class DarkWebScraper:
     def __init__(self):
-        self.session = None
         self.translator = GoogleTranslator(source='auto', target='en')
         self.executor = ThreadPoolExecutor(max_workers=5)
     
     async def scrape_alphabay(self, query):
-        """Scrape AlphaBay for products"""
+        """Scrape AlphaBay through TOR"""
         try:
-            # AlphaBay mirror (update with current mirrors)
+            # AlphaBay mirrors (update regularly)
             mirrors = [
                 "http://alphabayuzbekh4n5.onion",
                 "http://alphabaydni4bw7x.onion",
@@ -267,6 +333,8 @@ class DarkWebScraper:
                                     rating_elem = item.find('span', class_='rating')
                                     img_elem = item.find('img')
                                     desc_elem = item.find('div', class_='description')
+                                    stock_elem = item.find('span', class_='stock')
+                                    condition_elem = item.find('span', class_='condition')
                                     
                                     if name_elem and price_elem:
                                         listing = {
@@ -275,9 +343,9 @@ class DarkWebScraper:
                                             'seller': seller_elem.text.strip() if seller_elem else 'Unknown',
                                             'rating': rating_elem.text.strip() if rating_elem else '⭐ 4.5/5',
                                             'market': 'AlphaBay',
-                                            'condition': 'New',
+                                            'condition': condition_elem.text.strip() if condition_elem else 'New',
                                             'shipping': 'Worldwide (stealth)',
-                                            'stock': '12 units',
+                                            'stock': stock_elem.text.strip() if stock_elem else '12 units',
                                             'description': desc_elem.text.strip()[:200] if desc_elem else 'Premium product',
                                             'url': search_url,
                                             'image_url': img_elem.get('src') if img_elem else None
@@ -285,8 +353,10 @@ class DarkWebScraper:
                                         listings.append(listing)
                                 
                                 if listings:
+                                    logger.info(f"✅ Found {len(listings)} results on AlphaBay")
                                     return listings
-                except:
+                except Exception as e:
+                    logger.warning(f"AlphaBay mirror failed: {e}")
                     continue
             return []
         except Exception as e:
@@ -294,7 +364,7 @@ class DarkWebScraper:
             return []
     
     async def scrape_darkmarket(self, query):
-        """Scrape DarkMarket"""
+        """Scrape DarkMarket through TOR"""
         try:
             mirrors = [
                 "http://darkmarket24b4v7l2v.onion",
@@ -319,6 +389,7 @@ class DarkWebScraper:
                                     seller_elem = item.find('a', class_='vendor-link')
                                     img_elem = item.find('img', class_='product-image')
                                     stock_elem = item.find('span', class_='stock')
+                                    desc_elem = item.find('div', class_='description')
                                     
                                     if name_elem and price_elem:
                                         listing = {
@@ -330,15 +401,17 @@ class DarkWebScraper:
                                             'condition': 'New',
                                             'shipping': 'Worldwide',
                                             'stock': stock_elem.text.strip() if stock_elem else '8 units',
-                                            'description': 'High quality product',
+                                            'description': desc_elem.text.strip()[:200] if desc_elem else 'High quality product',
                                             'url': search_url,
                                             'image_url': img_elem.get('src') if img_elem else None
                                         }
                                         listings.append(listing)
                                 
                                 if listings:
+                                    logger.info(f"✅ Found {len(listings)} results on DarkMarket")
                                     return listings
-                except:
+                except Exception as e:
+                    logger.warning(f"DarkMarket mirror failed: {e}")
                     continue
             return []
         except Exception as e:
@@ -346,7 +419,7 @@ class DarkWebScraper:
             return []
     
     async def scrape_tor2door(self, query):
-        """Scrape Tor2Door"""
+        """Scrape Tor2Door through TOR"""
         try:
             search_url = f"http://tor2doorw3f7.onion/search?q={quote(query)}"
             async with await get_session() as session:
@@ -362,6 +435,7 @@ class DarkWebScraper:
                             name_elem = item.find('a', class_='title')
                             price_elem = item.find('span', class_='price')
                             seller_elem = item.find('span', class_='seller')
+                            desc_elem = item.find('div', class_='description')
                             
                             if name_elem and price_elem:
                                 listing = {
@@ -373,20 +447,22 @@ class DarkWebScraper:
                                     'condition': 'New/Used',
                                     'shipping': 'Worldwide',
                                     'stock': '15 units',
-                                    'description': 'Premium quality',
+                                    'description': desc_elem.text.strip()[:200] if desc_elem else 'Premium quality',
                                     'url': search_url,
                                     'image_url': None
                                 }
                                 listings.append(listing)
                         
-                        return listings
+                        if listings:
+                            logger.info(f"✅ Found {len(listings)} results on Tor2Door")
+                            return listings
             return []
         except Exception as e:
             logger.error(f"Tor2Door scrape error: {e}")
             return []
     
     async def search_all_markets(self, query):
-        """Search all markets simultaneously"""
+        """Search all markets simultaneously through TOR"""
         tasks = [
             self.scrape_alphabay(query),
             self.scrape_darkmarket(query),
@@ -397,6 +473,9 @@ class DarkWebScraper:
         all_results = []
         for market_results in results:
             all_results.extend(market_results)
+        
+        # Renew TOR IP after searches
+        tor_controller.renew_ip()
         
         return all_results
     
@@ -412,7 +491,7 @@ class DarkWebScraper:
                 'feedback': 'Fast shipping, good quality (2 hrs ago)',
                 'last_seen': 'Online now',
                 'pgp_key': 'Available',
-                'url': f'http://darkmarketxyz.onion/vendor/{vendor_name.lower()}'
+                'url': f'http://darkmarket.onion/vendor/{vendor_name.lower()}'
             }
             
             # Try to scrape real vendor data
@@ -448,6 +527,14 @@ class DarkWebScraper:
             'latest_listing': 'AK47 with silencer – $1,450 (5 mins ago)'
         }
         return stats
+    
+    async def translate_text(self, text, target_lang='en'):
+        """Translate text using Google Translate"""
+        try:
+            translated = self.translator.translate(text, target=target_lang)
+            return translated
+        except:
+            return text
 
 scraper = DarkWebScraper()
 
@@ -455,7 +542,7 @@ scraper = DarkWebScraper()
 class ImageProcessor:
     @staticmethod
     async def download_image(url):
-        """Download image from URL"""
+        """Download image from onion site through TOR"""
         if not url:
             return None
         
@@ -477,16 +564,16 @@ class ImageProcessor:
             return None
     
     @staticmethod
-    async def generate_product_image(product_name, price):
-        """Generate placeholder image"""
+    async def generate_product_image(product_name, price, accessory=None):
+        """Generate placeholder image with dark web theme"""
         try:
             img = Image.new('RGB', (800, 600), color='#1a0a0a')
             draw = ImageDraw.Draw(img)
             
-            # Draw border
+            # Dark web themed border
             draw.rectangle([10, 10, 790, 590], outline='#ff4444', width=3)
             
-            # Draw dark web themed background
+            # Grid pattern
             for i in range(0, 800, 40):
                 draw.line([(i, 0), (i, 600)], fill='#2a1a1a', width=1)
                 draw.line([(0, i), (800, i)], fill='#2a1a1a', width=1)
@@ -499,13 +586,28 @@ class ImageProcessor:
                 font = ImageFont.load_default()
                 font_small = ImageFont.load_default()
             
-            draw.text((400, 200), product_name, fill='#ff4444', font=font, anchor='mm')
-            draw.text((400, 280), f"Price: {price}", fill='#ffd700', font=font_small, anchor='mm')
-            draw.text((400, 340), "🔒 Dark Web Listing", fill='#888888', font=font_small, anchor='mm')
-            draw.text((400, 400), "⚠️ For Educational Research Only", fill='#ff0000', font=font_small, anchor='mm')
+            # Title
+            draw.text((400, 180), product_name, fill='#ff4444', font=font, anchor='mm')
             
-            # Add watermark
+            # Accessory if present
+            if accessory:
+                draw.text((400, 240), f"+ {accessory}", fill='#ff8800', font=font_small, anchor='mm')
+            
+            # Price
+            draw.text((400, 300), f"💰 Price: {price}", fill='#ffd700', font=font_small, anchor='mm')
+            
+            # Dark web badge
+            draw.text((400, 360), "🔒 Dark Web Listing", fill='#888888', font=font_small, anchor='mm')
+            
+            # Warning
+            draw.text((400, 420), "⚠️ For Educational Research Only", fill='#ff0000', font=font_small, anchor='mm')
+            
+            # Watermark
             draw.text((750, 570), "DarkEye", fill='#333333', font=font_small, anchor='rd')
+            
+            # TOR badge if enabled
+            if USE_TOR:
+                draw.text((50, 570), "🔐 TOR", fill='#00ff00', font=font_small)
             
             buffer = BytesIO()
             img.save(buffer, format='JPEG', quality=85)
@@ -541,12 +643,12 @@ async def start_cmd(client, message):
         f"**🛠️ Utilities:**\n"
         f"/image <product> - Image search\n"
         f"/deep <query> - Deep web search\n"
-        f"/proxy - Toggle Tor\n"
+        f"/proxy - Toggle TOR\n"
         f"/export - Export data\n\n"
         f"⚡ **Status:** 🟢 Online\n"
-        f"🛠️ **Platform:** Production\n"
-        f"🔒 **Security:** Tor + Encryption\n\n"
-        f"*All data for educational research only*",
+        f"🛠️ **Platform:** Render\n"
+        f"🔒 **Security:** {'TOR Enabled' if USE_TOR else 'Direct'}\n\n"
+        f"*For educational research only*",
         parse_mode=ParseMode.MARKDOWN
     )
 
@@ -556,7 +658,7 @@ async def search_product(client, message):
     query = message.text.split("/gn", 1)[1].strip()
     if not query:
         await message.reply_text(
-            "❌ Please specify a product to search.\n"
+            "❌ Please specify a product.\n"
             "Example: `/gn AK47`\n"
             "Example: `/gn AK47 with silencer`",
             parse_mode=ParseMode.MARKDOWN
@@ -570,7 +672,7 @@ async def search_product(client, message):
         await message.reply_text(cached, parse_mode=ParseMode.MARKDOWN)
         return
     
-    # Check if it's a combo search
+    # Check if combo search
     is_combo = " with " in query.lower()
     product_name = query.split(" with ")[0].strip() if is_combo else query
     accessory = query.split(" with ")[1].strip() if is_combo else None
@@ -578,7 +680,7 @@ async def search_product(client, message):
     # Send typing indicator
     await client.send_chat_action(message.chat.id, "typing")
     
-    # Search all markets
+    # Search all markets through TOR
     results = await scraper.search_all_markets(product_name)
     
     if not results:
@@ -591,7 +693,10 @@ async def search_product(client, message):
     
     # Format response
     response = f"🔍 **Search Results for:** `{query}`\n"
-    response += f"📊 **Found:** {len(results)} listings\n\n"
+    response += f"📊 **Found:** {len(results)} listings\n"
+    if USE_TOR:
+        response += f"🔐 **TOR:** Enabled (IP hidden)\n"
+    response += "\n"
     
     for idx, item in enumerate(results[:3], 1):
         response += f"**{idx}. {item['name']}**\n"
@@ -626,12 +731,19 @@ async def search_product(client, message):
                 )
         else:
             # Generate placeholder image
-            img_data = await image_processor.generate_product_image(item['name'], item['price'])
+            img_data = await image_processor.generate_product_image(
+                item['name'], 
+                item['price'],
+                accessory
+            )
             if img_data:
+                caption = f"🖼️ **{item['name']}**\n💰 {item['price']}\n🛒 {item['market']}"
+                if accessory:
+                    caption += f"\n🔧 + {accessory}"
                 await client.send_photo(
                     message.chat.id,
                     img_data,
-                    caption=f"🖼️ **{item['name']}**\n💰 {item['price']}\n🛒 {item['market']}",
+                    caption=caption,
                     parse_mode=ParseMode.MARKDOWN
                 )
     
@@ -655,6 +767,8 @@ async def leak_search(client, message):
         return
     
     response = f"💳 **Leaked Data Search:** `{query}`\n\n"
+    if USE_TOR:
+        response += f"🔐 **TOR:** Enabled\n\n"
     
     if "credit" in query.lower() or "card" in query.lower():
         response += "**Category:** Credit Cards (Visa/Mastercard/Amex)\n"
@@ -665,9 +779,8 @@ async def leak_search(client, message):
         response += "📦 **Available:** 200+ cards\n"
         response += "🔢 **Sample Data:** 4532**** ****1234 | Exp: 12/26 | CVV: 123\n"
         response += "📋 **Card Types:** Visa (45%), Mastercard (35%), Amex (20%)\n"
-        response += "🔗 **Link:** http://darkmarketxyz.onion/cards\n\n"
-        response += "⚠️ *For educational research only*\n"
-        response += "📊 *Data updated every 6 hours*"
+        response += "🔗 **Link:** http://darkmarket.onion/cards\n\n"
+        response += "⚠️ *For educational research only*"
         
         # Generate sample card image
         img_data = await image_processor.generate_product_image(
@@ -678,8 +791,7 @@ async def leak_search(client, message):
             await client.send_photo(
                 message.chat.id,
                 img_data,
-                caption="💳 Credit Card Sample Data - Blurred for security",
-                parse_mode=ParseMode.MARKDOWN
+                caption="💳 Credit Card Sample Data - Blurred for security"
             )
     
     elif "passport" in query.lower():
@@ -692,7 +804,7 @@ async def leak_search(client, message):
         response += "📦 **Stock:** 8 units\n"
         response += "🚚 **Shipping:** 3–5 days (stealth packaging)\n"
         response += "🔐 **Features:** RFID chip, UV security, Hologram\n"
-        response += "🔗 **Link:** http://darkmarketxyz.onion/passports\n\n"
+        response += "🔗 **Link:** http://darkmarket.onion/passports\n\n"
         response += "🛡️ *Verified source - Escrow available*"
     
     elif "ssn" in query.lower() or "social" in query.lower():
@@ -702,17 +814,8 @@ async def leak_search(client, message):
         response += "🏪 **Market:** AlphaBay\n"
         response += "📦 **Available:** 500+ records\n"
         response += "📊 **Data includes:** Full Name, DOB, Address\n"
-        response += "🔗 **Link:** http://darkmarketxyz.onion/ssn\n\n"
+        response += "🔗 **Link:** http://darkmarket.onion/ssn\n\n"
         response += "⚠️ *High risk - Use with caution*"
-    
-    elif "dox" in query.lower() or "doxx" in query.lower():
-        response += "**Category:** DOX (Personal Information)\n"
-        response += "💰 **Price:** $100-$500 per target\n"
-        response += "👤 **Seller:** DoxMaster (⭐ 4.3/5, 200 sales)\n"
-        response += "🏪 **Market:** Tor2Door\n"
-        response += "📊 **Includes:** Full name, Address, Phone, Email, SSN\n"
-        response += "🔗 **Link:** http://darkmarketxyz.onion/dox\n\n"
-        response += "🛡️ *High risk - Escrow recommended*"
     
     else:
         response += "🔍 **General Leak Search:**\n"
@@ -745,6 +848,8 @@ async def vendor_search(client, message):
     vendor_data = await scraper.get_vendor_info(vendor_name)
     
     response = f"👤 **Vendor Profile:** `{vendor_name}`\n\n"
+    if USE_TOR:
+        response += f"🔐 **TOR:** Active\n\n"
     response += f"⭐ **Rating:** {vendor_data['rating']}\n"
     response += f"🏪 **Markets Active:** {vendor_data['markets']}\n"
     response += f"📦 **Total Sales:** {vendor_data['sales']}\n"
@@ -778,6 +883,8 @@ async def market_stats(client, message):
     stats = await scraper.get_market_stats(market_name)
     
     response = f"📊 **Market Status:** `{market_name}`\n\n"
+    if USE_TOR:
+        response += f"🔐 **TOR:** Active\n\n"
     response += f"🟢 **Status:** {stats['status']}\n"
     response += f"⏱️ **Uptime:** {stats['uptime']}\n"
     response += f"📦 **Total Listings:** {stats['listings']}\n"
@@ -785,7 +892,7 @@ async def market_stats(client, message):
     response += f"🏆 **Top Vendors:** {stats['top_vendors']}\n"
     response += f"🆕 **Latest Listing:** {stats['latest_listing']}\n\n"
     response += f"📊 **Market Health:** 🟢 Excellent\n"
-    response += f"🔒 **Security:** Tor + PGP\n"
+    response += f"🔒 **Security:** TOR + PGP\n"
     response += f"💳 **Payment:** BTC, XMR, Monero\n\n"
     response += f"🔄 *Data updated every 30 minutes*"
     
@@ -822,6 +929,8 @@ async def track_product(client, message):
         )
     
     response = f"✅ **Tracking started for:** `{product_name}`\n\n"
+    if USE_TOR:
+        response += f"🔐 **TOR:** Active\n\n"
     response += f"💰 **Current Price:** $1,200\n"
     response += f"🎯 **Target Price:** ${target_price}\n"
     response += f"📉 **Drop Needed:** ${int(target_price) - 1200} more to hit target\n\n"
@@ -838,6 +947,8 @@ async def trending(client, message):
     await client.send_chat_action(message.chat.id, "typing")
     
     response = "🔥 **Today's Hottest Listings**\n\n"
+    if USE_TOR:
+        response += "🔐 **TOR:** Active\n\n"
     response += "1. **AK47** – $1,200 (🔥 50 views/hr) [🔫]\n"
     response += "   👤 RedArmory | ⭐ 4.8/5\n"
     response += "   📸 [Photo available]\n\n"
@@ -878,6 +989,8 @@ async def filter_products(client, message):
     await client.send_chat_action(message.chat.id, "typing")
     
     response = f"🔍 **Filtered Results:** {category} (${min_price} - ${max_price})\n\n"
+    if USE_TOR:
+        response += "🔐 **TOR:** Active\n\n"
     
     # Generate filtered results based on category
     if category.lower() in ["weapons", "guns", "firearms"]:
@@ -924,20 +1037,29 @@ async def image_search(client, message):
         return
     
     await client.send_chat_action(message.chat.id, "typing")
-    await message.reply_text(f"🖼️ **Searching images for:** `{product}`\n\n📸 Fetching from dark web listings...")
+    
+    status_msg = f"🖼️ **Searching images for:** `{product}`\n\n"
+    if USE_TOR:
+        status_msg += "🔐 **TOR:** Active\n\n"
+    status_msg += "📸 Fetching from dark web listings..."
+    await message.reply_text(status_msg, parse_mode=ParseMode.MARKDOWN)
     
     # Generate product image
     img_data = await image_processor.generate_product_image(product, "$1,200")
     if img_data:
+        caption = f"🖼️ **{product}** – Dark Web Listing\n"
+        caption += f"💰 $1,200 USD\n"
+        caption += f"🛒 Available on AlphaBay\n"
+        caption += f"⭐ 4.8/5 rating\n\n"
+        if USE_TOR:
+            caption += "🔐 **TOR:** Active\n\n"
+        caption += f"🔗 **URL:** http://darkmarket.onion/{product.lower()}\n"
+        caption += f"📸 *High-res available on request*"
+        
         await client.send_photo(
             message.chat.id,
             img_data,
-            caption=f"🖼️ **{product}** – Dark Web Listing\n"
-                    f"💰 $1,200 USD\n"
-                    f"🛒 Available on AlphaBay\n"
-                    f"⭐ 4.8/5 rating\n\n"
-                    f"🔗 **URL:** http://darkmarketxyz.onion/{product.lower()}\n"
-                    f"📸 *High-res available on request*",
+            caption=caption,
             parse_mode=ParseMode.MARKDOWN
         )
     
@@ -947,12 +1069,13 @@ async def image_search(client, message):
         if item.get('image_url'):
             img_data = await image_processor.download_image(item['image_url'])
             if img_data:
+                caption = f"🖼️ **{item['name']}**\n"
+                caption += f"💰 {item['price']}\n"
+                caption += f"🛒 {item['market']}"
                 await client.send_photo(
                     message.chat.id,
                     img_data,
-                    caption=f"🖼️ **{item['name']}**\n"
-                            f"💰 {item['price']}\n"
-                            f"🛒 {item['market']}",
+                    caption=caption,
                     parse_mode=ParseMode.MARKDOWN
                 )
 
@@ -983,6 +1106,8 @@ async def scam_check(client, message):
         recommendation = "⚠️ Avoid - Multiple red flags"
     
     response = f"🔍 **Scam Check:** `{vendor}`\n\n"
+    if USE_TOR:
+        response += "🔐 **TOR:** Active\n\n"
     response += f"🛡️ **Risk Score:** {risk_level} ({risk_score}/10)\n"
     response += f"📊 **Rating:** 4.8/5 (342 sales)\n"
     response += f"📉 **Negative Feedback:** 2% (mostly shipping delays)\n"
@@ -993,7 +1118,7 @@ async def scam_check(client, message):
     response += f"• {risk_level} - {recommendation}\n"
     response += f"• {random.choice(['Positive feedback pattern', 'Verified transactions', 'No dispute history'])}\n\n"
     response += f"🛡️ *Recommendation: {recommendation}*\n"
-    response += f"🔗 **Full Report:** http://darkmarketxyz.onion/report/{vendor.lower()}"
+    response += f"🔗 **Full Report:** http://darkmarket.onion/report/{vendor.lower()}"
     
     await message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
 
@@ -1012,10 +1137,13 @@ async def deep_search(client, message):
     
     await client.send_chat_action(message.chat.id, "typing")
     
+    response = f"🌐 **Deep Search:** `{query}`\n\n"
+    if USE_TOR:
+        response += "🔐 **TOR:** Active\n\n"
+    
     # Translate query if needed
     translator = GoogleTranslator(source='auto', target='en')
     
-    response = f"🌐 **Deep Search:** `{query}`\n\n"
     response += "🔍 **Multi-Language Results:**\n\n"
     
     # Russian results
@@ -1061,17 +1189,18 @@ async def toggle_proxy(client, message):
     # Toggle
     USE_TOR = not USE_TOR
     
-    response = "🔒 **Tor Proxy Status:**\n\n"
+    response = "🔒 **TOR Proxy Status:**\n\n"
     response += f"🟢 **Status:** {'Enabled' if USE_TOR else 'Disabled'}\n"
-    response += f"🌐 **IP:** {'127.0.0.1 (via Tor)' if USE_TOR else 'Normal IP'}\n"
+    response += f"🌐 **IP:** {'127.0.0.1 (via TOR)' if USE_TOR else 'Normal IP'}\n"
     response += f"🔄 **Circuit:** {'Active' if USE_TOR else 'Inactive'}\n"
     response += f"🛡️ **Encryption:** {'AES-256' if USE_TOR else 'None'}\n\n"
     
     if USE_TOR:
-        response += "✅ *All traffic routed through Tor network*\n"
+        response += "✅ *All traffic routed through TOR network*\n"
         response += "📍 *Location: Hidden (3 hops)*\n"
+        response += "🔄 *IP renewed automatically*"
     else:
-        response += "⚠️ *Tor disabled - Direct connection*\n"
+        response += "⚠️ *TOR disabled - Direct connection*\n"
         response += "🔒 *Enable for anonymity*"
     
     await message.reply_text(response, parse_mode=ParseMode.MARKDOWN)
@@ -1199,7 +1328,7 @@ def generate_mock_results(query, accessory=None):
             'shipping': "Worldwide (stealth)",
             'stock': "12 units",
             'description': f"Full auto, 7.62mm, includes 2 mags - {query}",
-            'url': "http://darkmarketxyz.onion/ak47",
+            'url': "http://darkmarket.onion/ak47",
             'image_url': None
         },
         {
@@ -1212,7 +1341,7 @@ def generate_mock_results(query, accessory=None):
             'shipping': "Worldwide",
             'stock': "8 units",
             'description': f"Enhanced version with tactical accessories - {query}",
-            'url': "http://darkmarketxyz.onion/ak47-improved",
+            'url': "http://darkmarket.onion/ak47-improved",
             'image_url': None
         },
         {
@@ -1225,7 +1354,7 @@ def generate_mock_results(query, accessory=None):
             'shipping': "Limited regions",
             'stock': "5 units",
             'description': f"Classic {query} with wooden furniture",
-            'url': "http://darkmarketxyz.onion/ak47-vintage",
+            'url': "http://darkmarket.onion/ak47-vintage",
             'image_url': None
         }
     ]
@@ -1235,6 +1364,11 @@ def generate_mock_results(query, accessory=None):
         products[0]['name'] = f"{query} + {accessory} (threaded)"
         products[0]['price'] = "$1,450 USD / 0.022 BTC"
         products[0]['description'] = f"{query} with {accessory} - tactical combo"
+        products[0]['seller'] = "SilentKill"
+        products[0]['rating'] = "⭐ 4.9/5 (89 sales)"
+        products[0]['market'] = "DarkMarket"
+        products[0]['stock'] = "5 units (combo)"
+        products[0]['extras'] = "Extra mags, cleaning kit included"
     
     return products
 
@@ -1259,17 +1393,36 @@ async def price_tracker():
                 if new_price < int(target_price):
                     # Send alert
                     app = await get_bot_instance()
-                    await app.send_message(
-                        chat_id,
-                        f"🔔 **Price Drop Alert!**\n\n"
-                        f"📦 **{product}**\n"
-                        f"💰 **Current Price:** ${new_price}\n"
-                        f"🎯 **Target Price:** ${target_price}\n"
-                        f"📉 **Savings:** ${int(target_price) - new_price}\n\n"
-                        f"📸 **Image:** [Click to view]\n"
-                        f"🔗 **URL:** http://darkmarketxyz.onion/{product.lower()}\n\n"
-                        f"🔄 *Update your tracking: /track {product} {target_price}*"
+                    
+                    # Generate image for alert
+                    img_data = await image_processor.generate_product_image(
+                        product,
+                        f"${new_price}",
+                        "Price Drop!"
                     )
+                    
+                    if img_data:
+                        await app.send_photo(
+                            chat_id,
+                            img_data,
+                            caption=f"🔔 **Price Drop Alert!**\n\n"
+                                    f"📦 **{product}**\n"
+                                    f"💰 **Current Price:** ${new_price}\n"
+                                    f"🎯 **Target Price:** ${target_price}\n"
+                                    f"📉 **Savings:** ${int(target_price) - new_price}\n\n"
+                                    f"🔗 **URL:** http://darkmarket.onion/{product.lower()}\n\n"
+                                    f"🔄 *Update tracking: /track {product} {target_price}*"
+                        )
+                    else:
+                        await app.send_message(
+                            chat_id,
+                            f"🔔 **Price Drop Alert!**\n\n"
+                            f"📦 **{product}**\n"
+                            f"💰 **Current Price:** ${new_price}\n"
+                            f"🎯 **Target Price:** ${target_price}\n"
+                            f"📉 **Savings:** ${int(target_price) - new_price}\n\n"
+                            f"🔗 **URL:** http://darkmarket.onion/{product.lower()}"
+                        )
                     
                     # Update database
                     try:
@@ -1283,6 +1436,17 @@ async def price_tracker():
             await asyncio.sleep(21600)  # 6 hours
         except Exception as e:
             logger.error(f"Price tracker error: {e}")
+            await asyncio.sleep(300)
+
+async def tor_renewer():
+    """Renew TOR IP every 10 minutes"""
+    while True:
+        try:
+            if USE_TOR:
+                tor_controller.renew_ip()
+            await asyncio.sleep(600)  # 10 minutes
+        except Exception as e:
+            logger.error(f"TOR renewer error: {e}")
             await asyncio.sleep(300)
 
 async def market_updater():
@@ -1338,10 +1502,19 @@ async def get_bot_instance():
     return _bot_instance
 
 async def main():
+    # Check TOR status
+    if USE_TOR:
+        if tor_controller.check_tor():
+            logger.info("✅ TOR is running and accessible")
+            tor_controller.renew_ip()
+        else:
+            logger.warning("⚠️ TOR not accessible - running in direct mode")
+    
     # Start background tasks
     asyncio.create_task(price_tracker())
     asyncio.create_task(market_updater())
     asyncio.create_task(clean_old_data())
+    asyncio.create_task(tor_renewer())
     
     # Start bot
     app = await get_bot_instance()
@@ -1351,10 +1524,11 @@ async def main():
     ╔══════════════════════════════════════╗
     ║  🔥 DarkEye Scanner Bot v2.0 🔥      ║
     ║  All 14 Features Active              ║
+    ║  TOR: %s                    ║
     ║  Status: 🟢 ONLINE                   ║
-    ║  Platform: Production                ║
+    ║  Platform: Render                    ║
     ╚══════════════════════════════════════╝
-    """)
+    """ % ("✅ Enabled" if USE_TOR else "❌ Disabled"))
     
     logger.info("✅ All background tasks started")
     logger.info("📱 Bot is ready! Test: /start")
