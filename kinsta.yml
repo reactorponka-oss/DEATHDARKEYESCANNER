@@ -1,6 +1,5 @@
-# Kinsta configuration
 name: darkeye-bot
 functions:
   - path: /api
     runtime: python3.11
-    handler: bot.handler
+    handler: app.main
