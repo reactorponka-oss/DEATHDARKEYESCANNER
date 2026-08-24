@@ -1,5 +1,2 @@
 name: darkeye-bot
-functions:
-  - path: /api
-    runtime: python3.11
-    handler: app.main
+start: python app.py
