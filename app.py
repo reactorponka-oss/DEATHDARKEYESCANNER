@@ -45,7 +45,7 @@ API_ID = int(os.environ.get("API_ID", 30622410))
 API_HASH = os.environ.get("API_HASH", "ac0e642a6cf43ced04f3cc2eabf5a21d")
 
 # TOR Configuration
-USE_TOR = os.environ.get("USE_TOR", "false").lower() == "true"
+USE_TOR = os.environ.get("USE_TOR", ""true").lower() == "true"
 TOR_PROXY = "socks5://127.0.0.1:9050"
 
 # ============================================================
